@@ -59,7 +59,7 @@ def create_executor(address: str=None) -> DaskPipelineExecutor:
         Um executor Dask
     """
     if address is not None:
-        addr = ":".join(address.split(":")[:1])
+        addr = ":".join(address.split(":")[:2])
         port = str(address.split(":")[-1])
         print(f"Criando executor. Endereço: {addr}, porta: {port}")
         return DaskPipelineExecutor(local=False, use_gpu=False, address=addr, port=port)
@@ -158,6 +158,6 @@ if __name__ == "__main__":
     if args.save_inline_fig is not None:
         res = res.reshape((401, 701, 255))
         import matplotlib.pyplot as plt
-        plt.imsave(args.save_inline_fig, res[0], cmap="virids")
+        plt.imsave(args.save_inline_fig, res[0], cmap="viridis")
         print(f"Figura da inline 0 salva em {args.save_inline_fig}")
     
