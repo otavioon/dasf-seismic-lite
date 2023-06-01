@@ -19,7 +19,7 @@ from dasf.utils.decorators import task_handler
 class MyDataset(Dataset):
     """Classe para carregar dados de um arquivo .npy
     """
-    def __init__(self, name: str, data_path: str, chunks: str = "50Mb"):
+    def __init__(self, name: str, data_path: str, chunks: str = "32Mb"):
         """Instancia um objeto da classe MyDataset
 
         Parameters
@@ -91,8 +91,8 @@ def create_pipeline(dataset_path: str, executor: DaskPipelineExecutor, pipeline_
     # Persist é super importante! Se não cada partial_fit do k-means vai computar o grafo até o momento!
     # Usando persist, garantimos que a computação até aqui já foi feita e está em memória distribuida.
     persist = PersistDaskData()
-    # Cria um objeto k-means com 6 clusters, minimo e máximo de iterações de 1
-    kmeans = KMeans(n_clusters=6, max_iter=1, init_max_iter=1)
+    # Cria um objeto k-means com 5 clusters
+    kmeans = KMeans(n_clusters=5, max_iter=15)
     
     # Compondo o pipeline
     pipeline = Pipeline(
