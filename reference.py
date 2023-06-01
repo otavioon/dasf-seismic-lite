@@ -5,6 +5,8 @@ import dask.array as da
 import numpy as np
 import time
 
+import matplotlib.pyplot as plt
+
 from dasf_seismic.attributes.complex_trace import Envelope, InstantaneousPhase
 from dasf.ml.cluster.kmeans import KMeans
 from dasf.transforms import ArraysToDataFrame, PersistDaskData
@@ -57,13 +59,14 @@ def create_executor(address: str=None) -> DaskPipelineExecutor:
         Um executor Dask
     """
     if address is not None:
-        address = ":".join(address.split(":")[:2])
-        port = int(address.split(":")[-1])
-        return DaskPipelineExecutor(address=address, port=port)
+        addr = ":".join(address.split(":")[:1])
+        port = str(address.split(":")[-1])
+        print(f"Criando executor. Endereço: {addr}, porta: {port}")
+        return DaskPipelineExecutor(local=False, use_gpu=False, address=addr, port=port)
     else:
-        return DaskPipelineExecutor()
+        return DaskPipelineExecutor(local=True, use_gpu=False)
         
-def create_pipeline(dataset_path: str, executor: DaskPipelineExecutor) -> Tuple[Pipeline, Callable]:
+def create_pipeline(dataset_path: str, executor: DaskPipelineExecutor, pipeline_save_location: str = None) -> Tuple[Pipeline, Callable]:
     """Cria o pipeline DASF para ser executado
 
     Parameters
@@ -79,14 +82,16 @@ def create_pipeline(dataset_path: str, executor: DaskPipelineExecutor) -> Tuple[
         Uma tupla, onde o primeiro elemento é o pipeline e o segundo é último operador (kmeans.fit_predict), 
         de onde os resultados serão obtidos.
     """
+    print("Criando pipeline....")
     # Declarando os operadores necessários
     dataset = MyDataset(name="F3 dataset", data_path=dataset_path)
     envelope = Envelope()
     phase = InstantaneousPhase()
     arrays2df = ArraysToDataFrame()
     # Persist é super importante! Se não cada partial_fit do k-means vai computar o grafo até o momento!
+    # Usando persist, garantimos que a computação até aqui já foi feita e está em memória distribuida.
     persist = PersistDaskData()
-    # Cria um objeto k-means com 6 clusters
+    # Cria um objeto k-means com 6 clusters, minimo e máximo de iterações de 1
     kmeans = KMeans(n_clusters=6, max_iter=1, init_max_iter=1)
     
     # Compondo o pipeline
@@ -100,6 +105,9 @@ def create_pipeline(dataset_path: str, executor: DaskPipelineExecutor) -> Tuple[
     pipeline.add(arrays2df, dataset=dataset, envelope=envelope, phase=phase)
     pipeline.add(persist, X=arrays2df)
     pipeline.add(kmeans.fit_predict, X=persist)
+    
+    if pipeline_save_location is not None:
+    	pipeline.visualize(filename=pipeline_save_location)
     
     # Retorna o pipeline e o operador kmeans, donde os resultados serão obtidos
     return pipeline, kmeans.fit_predict
@@ -119,6 +127,7 @@ def run(pipeline: Pipeline, last_node: Callable) -> np.ndarray:
     np.ndarray
         NumPy array com os resultados
     """
+    print("Executando pipeline")
     start = time.time()
     pipeline.run()
     res = pipeline.get_result_from(last_node)
@@ -133,9 +142,22 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Executa o pipeline")
     parser.add_argument("--data", type=str, required=True, help="Caminho para o arquivo .npy")
     parser.add_argument("--address", type=str, default=None, help="Endereço do scheduler. Formato: tcp://<ip>:<port>")
+    parser.add_argument("--save-pipeline-fig", type=str, default=None, help="Local para salvar a figura do pipeline")
+    parser.add_argument("--save-inline-fig", type=str, default=None, help="Local para salvar a figura da inline 0 do k-means")
     args = parser.parse_args()
    
+    # Criamos o executor
     executor = create_executor(args.address)
-    pipeline, last_node = create_pipeline(args.data_path, args.address)
+    # Depois o pipeline
+    pipeline, last_node = create_pipeline(args.data, executor, pipeline_save_location=args.save_pipeline_fig)
+    # Executamos e pegamos o resultado
     res = run(pipeline, last_node)
-    print(f"Resultado: {res.shape}")
+    print(f"O resultado é um array com o shape: {res.shape}")
+    
+    # Podemos fazer o reshape e printar a primeira inline
+    if args.save_inline_fig is not None:
+        res = res.reshape((401, 701, 255))
+        import matplotlib.pyplot as plt
+        plt.imsave(args.save_inline_fig, res[0], cmap="virids")
+        print(f"Figura da inline 0 salva em {args.save_inline_fig}")
+    
