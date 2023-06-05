@@ -36,7 +36,7 @@ class MyDataset(Dataset):
         self.chunks = chunks
         
     def _lazy_load_cpu(self):
-        return da.from_array(np.load(self.data_path), chunks=self.chunks)
+        return da.from_zarr(self.data_path, chunks=self.chunks)
     
     def _load_cpu(self):
         return np.load(self.data_path)
@@ -92,7 +92,7 @@ def create_pipeline(dataset_path: str, executor: DaskPipelineExecutor, pipeline_
     # Usando persist, garantimos que a computação até aqui já foi feita e está em memória distribuida.
     persist = PersistDaskData()
     # Cria um objeto k-means com 5 clusters
-    kmeans = KMeans(n_clusters=5, max_iter=15)
+    kmeans = KMeans(n_clusters=5, max_iter=15, init="random", algorithm="full")
     
     # Compondo o pipeline
     pipeline = Pipeline(
