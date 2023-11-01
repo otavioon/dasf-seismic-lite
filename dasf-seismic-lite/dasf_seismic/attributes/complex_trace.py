@@ -9,7 +9,10 @@ import dask.array as da
 
 try:
     import cupy as cp
-    import cusignal
+    if cp.cuda.runtime.runtimeGetVersion() >= 12000:
+        import cupyx.scipy.signal as cusignal
+    else:
+        import cusignal
 except ImportError:
     pass
 
@@ -51,18 +54,15 @@ class Hilbert(Transform):
         return analytical_trace
 
     def _lazy_transform_gpu(self, X):
-        if X.shape[-1] != X.chunksize[-1]:
-            time_edge = int(X.chunksize[-1] * 0.1)
-            if time_edge < 5:
-                time_edge = X.chunksize[-1] * 0.5
+        kernel = set_time_chunk_overlap(X)
 
-            kernel = (1, 1, int(time_edge))
+        if kernel:
             X, chunks_init = create_array(X, kernel,
                                           preview=self._preview)
 
         analytical_trace = self._lazy_transform(X, xsignal=cusignal, xp=cp)
 
-        if X.shape[-1] != X.chunksize[-1]:
+        if kernel:
             return trim_dask_array(analytical_trace, kernel)
         return analytical_trace
 
@@ -424,7 +424,7 @@ class ResponsePhase(Transform):
         self.__inst_phase = InstantaneousPhase(preview=preview)
 
     def __operation(self, chunk1, chunk2, chunk3, xp):
-        out = xp.zeros(chunk1.shape)
+        out = xp.zeros_like(chunk1)
         for i, j in np.ndindex(out.shape[:-1]):
             ints = xp.unique(chunk3[i, j, :])
             for ii in ints:
@@ -439,11 +439,12 @@ class ResponsePhase(Transform):
         phase = self.__inst_phase._lazy_transform_gpu(X)
 
         troughs = env.map_blocks(local_events, comparator=cp.less,
-                                 is_cupy=True, dtype=X.dtype)
+                                 is_cupy=True, dtype=X.dtype,
+                                 meta=cp.array((), dtype=X.dtype))
 
         troughs = troughs.cumsum(axis=-1)
         result = da.map_blocks(self.__operation, env, phase, troughs, cp,
-                               dtype=X.dtype)
+                               dtype=X.dtype, meta=cp.array((), dtype=X.dtype))
         result[da.isnan(result)] = 0
 
         return result
@@ -465,7 +466,7 @@ class ResponsePhase(Transform):
     def _transform_gpu(self, X):
         env = self.__envelope._transform_gpu(X)
         phase = self.__inst_phase._transform_gpu(X)
-        troughs = local_events(env, comparator=np.less, is_cupy=True)
+        troughs = local_events(env, comparator=cp.less, is_cupy=True)
 
         troughs = troughs.cumsum(axis=-1)
         result = self.__operation(env, phase, troughs, cp)
@@ -496,7 +497,7 @@ class ResponseFrequency(Transform):
                                                   preview=preview)
 
     def __operation(self, chunk1, chunk2, chunk3, xp):
-        out = xp.zeros(chunk1.shape)
+        out = xp.zeros_like(chunk1)
         for i, j in np.ndindex(out.shape[:-1]):
             ints = xp.unique(chunk3[i, j, :])
             for ii in ints:
@@ -510,11 +511,12 @@ class ResponseFrequency(Transform):
         env = self.__envelope._lazy_transform_gpu(X)
         inst_freq = self.__inst_freq._lazy_transform_gpu(X)
         troughs = env.map_blocks(local_events, comparator=cp.less,
-                                 is_cupy=True, dtype=X.dtype)
+                                 is_cupy=True, dtype=X.dtype,
+                                 meta=cp.array((), dtype=X.dtype))
 
         troughs = troughs.cumsum(axis=-1)
         result = da.map_blocks(self.__operation, env, inst_freq, troughs, cp,
-                               dtype=X.dtype)
+                               dtype=X.dtype, meta=cp.array((), dtype=X.dtype))
         result[da.isnan(result)] = 0
 
         return result
@@ -566,7 +568,7 @@ class ResponseAmplitude(Transform):
         self.__envelope = Envelope(preview=preview)
 
     def __operation(self, chunk1, chunk2, chunk3, xp):
-        out = xp.zeros(chunk1.shape)
+        out = xp.zeros_like(chunk1)
         for i, j in np.ndindex(out.shape[:-1]):
             ints = xp.unique(chunk3[i, j, :])
             for ii in ints:
@@ -579,14 +581,15 @@ class ResponseAmplitude(Transform):
     def _lazy_transform_gpu(self, X):
         env = self.__envelope._lazy_transform_gpu(X)
         troughs = env.map_blocks(local_events, comparator=cp.less,
-                                 is_cupy=True, dtype=X.dtype)
+                                 is_cupy=True, dtype=X.dtype,
+                                 meta=cp.array((), dtype=X.dtype))
 
         troughs = troughs.cumsum(axis=-1)
 
         X = X.rechunk(env.chunks)
 
         result = da.map_blocks(self.__operation, env, X, troughs, cp,
-                               dtype=X.dtype)
+                               dtype=X.dtype, meta=cp.array((), dtype=X.dtype))
 
         result[da.isnan(result)] = 0
 
@@ -640,7 +643,7 @@ class ApparentPolarity(Transform):
         self.__envelope = Envelope(preview=preview)
 
     def __operation(self, chunk1, chunk2, chunk3, xp):
-        out = xp.zeros(chunk1.shape)
+        out = xp.zeros_like(chunk1)
         for i, j in np.ndindex(out.shape[:-1]):
             ints = xp.unique(chunk3[i, j, :])
 
@@ -655,14 +658,15 @@ class ApparentPolarity(Transform):
     def _lazy_transform_gpu(self, X):
         env = self.__envelope._lazy_transform_gpu(X)
         troughs = env.map_blocks(local_events, comparator=cp.less,
-                                 is_cupy=True, dtype=X.dtype)
+                                 is_cupy=True, dtype=X.dtype,
+                                 meta=cp.array((), dtype=X.dtype))
 
         troughs = troughs.cumsum(axis=-1)
 
         X = X.rechunk(env.chunks)
 
         result = da.map_blocks(self.__operation, env, X, troughs, cp,
-                               dtype=X.dtype)
+                               dtype=X.dtype, meta=cp.array((), dtype=X.dtype))
 
         result[da.isnan(result)] = 0
 

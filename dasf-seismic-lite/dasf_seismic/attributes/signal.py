@@ -9,7 +9,10 @@ from scipy import signal
 
 try:
     import cupy as cp
-    import cusignal
+    if cp.cuda.runtime.runtimeGetVersion() >= 12000:
+        import cupyx.scipy.signal as cusignal
+    else:
+        import cusignal
 
     from cupyx.scipy import ndimage as cundi
 except ImportError:
@@ -154,7 +157,7 @@ class SecondDerivative(Transform):
 
 class HistogramEqualization(Transform):
     def __interpolate(self, chunk, cdf, bins, xp):
-        out = xp.interp(chunk.ravel(), bins, cdf)
+        out = xp.interp(chunk.ravel(), bins, cdf).astype(chunk.dtype)
 
         return out.reshape(chunk.shape)
 
@@ -163,7 +166,7 @@ class HistogramEqualization(Transform):
         da_min = X.min()
 
         hist, bins = da.histogram(X,
-                                  bins=cp.linspace(da_min, da_max, 256,
+                                  bins=np.linspace(da_min, da_max, 256,
                                                    dtype=X.dtype))
 
         cdf = hist.cumsum(axis=-1)
@@ -171,7 +174,7 @@ class HistogramEqualization(Transform):
         bins = (bins[:-1] + bins[1:]) / 2
 
         return X.map_blocks(self.__interpolate, cdf=cdf, bins=bins, xp=cp,
-                            dtype=X.dtype)
+                            dtype=X.dtype, meta=cp.array((), dtype=X.dtype))
 
     def _lazy_transform_cpu(self, X):
         da_max = X.max()
@@ -225,28 +228,28 @@ class TimeGain(Transform):
         self._preview = preview
 
     def _lazy_transform_gpu(self, X):
-        z_ind = da.ones(X.shape, chunks=X.chunks).cumsum(axis=-1)
+        z_ind = da.ones_like(X, chunks=X.chunks).cumsum(axis=-1)
 
         gain = (1 + z_ind) ** self._gain_val
 
         return X * gain
 
     def _lazy_transform_cpu(self, X):
-        z_ind = da.ones(X.shape, chunks=X.chunks).cumsum(axis=-1)
+        z_ind = da.ones_like(X, chunks=X.chunks).cumsum(axis=-1)
 
         gain = (1 + z_ind) ** self._gain_val
 
         return X * gain
 
     def _transform_gpu(self, X):
-        z_ind = cp.ones(X.shape).cumsum(axis=-1)
+        z_ind = cp.ones_like(X, dtype=X.dtype).cumsum(axis=-1)
 
         gain = (1 + z_ind) ** self._gain_val
 
         return X * gain
 
     def _transform_cpu(self, X):
-        z_ind = np.ones(X.shape).cumsum(axis=-1)
+        z_ind = np.ones_like(X).cumsum(axis=-1)
 
         gain = (1 + z_ind) ** self._gain_val
 
@@ -507,7 +510,7 @@ class ReflectionIntensity(Transform):
         X, chunks_init = create_array(X, self._kernel, preview=self._preview)
 
         result = X.map_blocks(self.__operation, kernel=self._kernel, xp=xp,
-                              dtype=X.dtype, chunks=chunks_init)
+                              dtype=X.dtype, chunks=chunks_init, meta=xp.array((), dtype=X.dtype))
 
         result = trim_dask_array(result, self._kernel)
 
@@ -548,7 +551,7 @@ class PhaseRotation(Transform):
         if kernel:
             X, chunks_init = create_array(X, kernel, preview=self._preview)
 
-        phi = xp.deg2rad(self._rotation)
+        phi = xp.deg2rad(self._rotation, dtype=X.dtype)
 
         analytical_trace = X.map_blocks(xsignal.hilbert, dtype=X.dtype,
                                         meta=xp.array((), dtype=X.dtype))
@@ -564,7 +567,7 @@ class PhaseRotation(Transform):
         return result
 
     def _transform(self, X, xsignal, xp):
-        phi = xp.deg2rad(self._rotation)
+        phi = xp.deg2rad(self._rotation, dtype=X.dtype)
 
         analytical_trace = xsignal.hilbert(X)
 

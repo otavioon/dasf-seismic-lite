@@ -208,17 +208,21 @@ def extract_patches(in_data, kernel, xp):
                                   kernel[2])
     """
 
-    strides = in_data.strides + in_data.strides
     # This is a workaround for cases where dask chunks are empty
     # Numpy handles if quietly, CuPy does not.
     if in_data.shape == (0, 0, 0):
         return []
 
-    shape = tuple(list(in_data.shape) + list(kernel))
+    padding = np.array(kernel) // 2
+    patches = xp.pad(in_data, ((padding[0], padding[0]), (padding[1], padding[1]), (padding[2], padding[2])), mode='symmetric')
+    strides = patches.strides + patches.strides
+    shape = tuple(list(patches.shape) + list(kernel))
 
-    patches = xp.lib.stride_tricks.as_strided(in_data,
+    patches = xp.lib.stride_tricks.as_strided(patches,
                                               shape=shape,
                                               strides=strides)
+    shape = in_data.shape
+    patches = patches[:shape[0], :shape[1], :shape[2]]
 
     return patches
 
@@ -243,7 +247,8 @@ def local_events(in_data, comparator, is_cupy=False):
         trace = in_data.take(idx, axis=-1)
         plus = in_data.take(idx + 1, axis=-1)
         minus = in_data.take(idx - 1, axis=-1)
-
+        plus[:,:,-1] = trace[:,:,-1]
+        minus[:,:,0] = trace[:,:,0]
         result = cp.ones(in_data.shape, dtype=bool)
     else:
         idx = np.arange(0, in_data.shape[-1])
@@ -280,8 +285,9 @@ def convert_to_seisnc(segyin, iline=189, xline=193, cdpx=181, cdpy=185):
 
 # XXX: Function map_segy needs to open locally the file due to problems of
 # serialization when dask transports the segyio object through workers.
-def map_segy(x, tmp, contiguous, xp, mode='r', iline=189, xline=193, strict=True,
-             ignore_geometry=False, endian='big', block_info=None):
+def map_segy(x, tmp, contiguous, xp, mode='r', iline=189, xline=193,
+             strict=True, ignore_geometry=False, endian='big',
+             block_info=None):
     segyfile = segyio.open(tmp, mode=mode, iline=iline, xline=xline,
                            ignore_geometry=ignore_geometry, strict=strict,
                            endian=endian)
@@ -319,6 +325,8 @@ def inf_to_min_value(array, xp):
 
 def set_time_chunk_overlap(dask_array):
     if dask_array.shape[-1] != dask_array.chunksize[-1]:
+        print("WARNING: splitting the time axis in chunks can cause significant performance degradation.")
+
         time_edge = int(dask_array.chunksize[-1] * 0.1)
         if time_edge < 5:
             time_edge = dask_array.chunksize[-1] * 0.5
@@ -330,3 +338,18 @@ def set_time_chunk_overlap(dask_array):
 def dask_cupy_angle_wrapper(data):
     return data.map_blocks(cp.angle, dtype=data.dtype,
                            meta=cp.array((), dtype=data.dtype))
+
+
+def matching_dtypes(src_dtype, target_dtype, default):
+    dtypes = {
+        "float32": {
+            "int": "int32",
+            "complex": "complex64",
+        },
+        "float64": {
+            "int": "int64",
+            "complex": "complex128",
+        }
+    }
+
+    return dtypes.get(str(src_dtype), {}).get(target_dtype, default)
